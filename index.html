@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 图片展示</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="app" class="container mx-auto px-4 py-8">
+        <!-- 搜索框容器 -->
+        <div class="fixed top-0 left-0 right-0 z-50 transition-transform duration-300 bg-white/80 backdrop-blur-sm shadow-md"
+             :class="{ '-translate-y-full': hideSearch }"
+             :style="{ transform: showSearch ? 'translateY(0)' : '' }">
+            <div class="container mx-auto px-4 py-4">
+                <div class="max-w-xl mx-auto flex items-center gap-4">
+                    <input type="text" 
+                           v-model="searchQuery" 
+                           @keyup.enter="handleSearch"
+                           placeholder="搜索图片..."
+                           class="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all">
+                    <button @click="handleSearch"
+                            class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                        搜索
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 修改弹窗组件 -->
+        <div v-if="showPopup" 
+             class="fixed inset-0 z-50 flex flex-col bg-black"
+             @click.self="closePopup">
+            <!-- 主要内容区域（图片和信息） -->
+            <div class="flex-1 flex overflow-hidden">
+                <!-- 主图片区域 -->
+                <div class="flex-1 relative overflow-hidden flex items-center justify-center"
+                     @wheel.prevent="handleWheel">
+                    <canvas ref="canvas"
+                            @mousedown="startDrag"
+                            @dblclick="toggleZoom"
+                            :class="{'cursor-grab': !isDragging, 'cursor-grabbing': isDragging}"
+                            class="max-w-full max-h-[90vh]">
+                    </canvas>
+                </div>
+
+                <!-- 侧边信息栏 -->
+                <div class="w-80 bg-gray-900 text-white p-6 overflow-y-auto">
+                    <h3 class="text-xl font-bold mb-6 text-gray-100">图片信息</h3>
+                    <div class="space-y-6">
+                        <div class="border-b border-gray-700 pb-4">
+                            <div class="flex items-center gap-3 mb-4">
+                                <img :src="selectedImage?.user?.profile_image?.medium" 
+                                     :alt="selectedImage?.user?.name"
+                                     class="w-10 h-10 rounded-full">
+                                <div>
+                                    <p class="font-medium">{{ selectedImage?.user?.name }}</p>
+                                    <p class="text-sm text-gray-400">{{ selectedImage?.user?.username }}</p>
+                                </div>
+                            </div>
+                            <p class="text-gray-300 text-sm">
+                                {{ selectedImage?.description || selectedImage?.alt_description || '无描述' }}
+                            </p>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-400">尺寸</span>
+                                <span class="text-gray-200">{{ selectedImage?.width }} x {{ selectedImage?.height }}</span>
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-400">喜欢数</span>
+                                <span class="text-gray-200">{{ selectedImage?.likes }}</span>
+                            </div>
+                            <div class="flex justify-between items-center text-sm">
+                                <span class="text-gray-400">拍摄时间</span>
+                                <span class="text-gray-200">{{ selectedImage?.created_at?.split('T')[0] }}</span>
+                            </div>
+                        </div>
+
+                        <div class="space-y-3">
+                            <a :href="selectedImage?.links?.html" 
+                               target="_blank"
+                               class="block w-full px-4 py-2 bg-blue-500 text-center text-white rounded-lg hover:bg-blue-600 transition-colors">
+                                在 Unsplash 查看
+                            </a>
+                            <a :href="selectedImage?.urls?.full" 
+                               target="_blank" 
+                               download
+                               class="block w-full px-4 py-2 bg-gray-700 text-center text-white rounded-lg hover:bg-gray-600 transition-colors">
+                                下载原图
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部预览栏 -->
+            <div class="h-24 bg-gray-900/90 backdrop-blur-sm border-t border-gray-800">
+                <div class="flex items-center justify-center h-full px-4 relative">
+                    <!-- 添加左右滚动按钮 -->
+                    <button v-if="canScrollLeft"
+                            @click="scrollThumbnails('left')"
+                            class="absolute left-2 z-10 p-2 text-white bg-black/50 rounded-full hover:bg-black/70 transition-colors">
+                        ◀
+                    </button>
+                    
+                    <div ref="thumbnailContainer" 
+                         class="flex items-center h-full space-x-2 overflow-x-hidden"
+                         style="scroll-behavior: smooth;">
+                        <div v-for="(image, index) in processedImages" 
+                             :key="image.id"
+                             @click="selectImage(index)"
+                             class="h-20 w-28 flex-shrink-0 cursor-pointer transition-all duration-300 rounded-lg overflow-hidden"
+                             :class="{'ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-900': selectedImageIndex === index}"
+                             :ref="selectedImageIndex === index ? 'selectedThumbnail' : null">
+                            <img :src="image.urls.regular" 
+                                 :alt="image.alt_description"
+                                 class="h-full w-full object-cover">
+                        </div>
+                    </div>
+
+                    <button v-if="canScrollRight"
+                            @click="scrollThumbnails('right')"
+                            class="absolute right-2 z-10 p-2 text-white bg-black/50 rounded-full hover:bg-black/70 transition-colors">
+                        ▶
+                    </button>
+                </div>
+            </div>
+
+            <!-- 关闭按钮 -->
+            <button @click="closePopup" 
+                    class="absolute top-4 right-4 p-2 text-white hover:text-gray-300 transition-colors">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </button>
+
+            <!-- 添加图片导航按钮 -->
+            <button @click="selectImage((selectedImageIndex - 1 + processedImages.length) % processedImages.length)"
+                    class="absolute left-4 top-1/2 -translate-y-1/2 p-2 text-white bg-black/50 rounded-full hover:bg-black/70 transition-colors">
+                ◀
+            </button>
+            <button @click="selectImage((selectedImageIndex + 1) % processedImages.length)"
+                    class="absolute right-4 top-1/2 -translate-y-1/2 p-2 text-white bg-black/50 rounded-full hover:bg-black/70 transition-colors">
+                ▶
+            </button>
+        </div>
+
+        <!-- <h1 class="text-3xl font-bold text-center mb-8 mt-16">AI 相关图片展示</h1> -->
+        
+        <div class="relative" ref="gallery">
+            <div v-for="image in processedImages" 
+                 :key="image.id" 
+                 :style="{
+                     position: 'absolute',
+                     top: image.top + 'px',
+                     left: image.left + 'px',
+                     width: columnWidth + 'px',
+                     transform: 'translate3d(0, 0, 0)'
+                 }"
+                 class="bg-white rounded-lg shadow-lg overflow-hidden hover:shadow-xl transition-shadow duration-300">
+                <div class="relative w-full group">
+                    <img :src="image.urls.regular" 
+                         :alt="image.alt_description"
+                         loading="lazy"
+                         @load="onImageLoad(image)"
+                         @click="openPopup(image)"
+                         class="w-full hover:scale-105 transition-transform duration-300 cursor-zoom-in">
+                    
+                    <!-- 悬浮信息层 -->
+                    <div class="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4 text-white cursor-pointer"
+                         @click="openPopup(image)">
+                        <p class="text-sm font-medium mb-2">
+                            摄影师: {{ image.user.name }}
+                        </p>
+                        <p class="text-sm mb-2">
+                            {{ image.description || image.alt_description || '无描述' }}
+                        </p>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm">
+                                ❤️ {{ image.likes }}
+                            </span>
+                            <a :href="image.links.html" 
+                               target="_blank"
+                               class="text-white hover:text-blue-200 text-sm">
+                                查看原图
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 加载状态提示 -->
+        <div v-if="loading" class="text-center py-8">
+            <p class="text-gray-600 mb-4">加载中...</p>
+            <button v-if="loading && page > 2" @click="retryLoading" 
+                    class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors">
+                点击重试加载
+            </button>
+        </div>
+
+        <!-- 加载完成提示 -->
+        <div v-if="noMoreData" class="text-center py-8">
+            <p class="text-gray-600">没有更多图片了</p>
+        </div>
+    </div>
+
+    <script>
+        Vue.createApp({
+            data() {
+                return {
+                    images: [],
+                    processedImages: [],
+                    loading: false,
+                    error: null,
+                    page: 1,
+                    noMoreData: false,
+                    query: 'cat',
+                    perPage: 20,
+                    baseColumnWidth: 250,  // 基础列宽
+                    minColumnWidth: 150,   // 最小列宽
+                    maxColumnWidth: 350,   // 最大列宽
+                    gap: 10,
+                    columns: [],
+                    containerWidth: 0,
+                    columnCount: 0,
+                    loadedImagesCount: 0,
+                    currentBatchSize: 0,
+                    loadingImages: new Set(),
+                    maxRetries: 3,           // 最大重试次数
+                    retryDelay: 1000,        // 重试延迟（毫秒）
+                    loadingQueue: [],        // 加载队列
+                    currentLoadingPage: null, // 当前正在加载的页码
+                    searchQuery: '',
+                    hideSearch: false,
+                    lastScrollTop: 0,
+                    showSearch: true,
+                    requestTimeout: 2000,    // 请求超时时间（毫秒）
+                    showPopup: false,
+                    selectedImage: null,
+                    translateX: 0,
+                    translateY: 0,
+                    scale: 1,
+                    isDragging: false,
+                    selectedImageIndex: null,
+                    baseScale: 1,
+                    startX: 0,
+                    startY: 0,
+                    ctx: null,
+                    imageObj: null,
+                    viewportWidth: 0,
+                    viewportHeight: 0,
+                    imageWidth: 0,
+                    imageHeight: 0,
+                    centerX: 0,
+                    centerY: 0,
+                    minScale: 1,
+                    maxScale: 3,
+                    canScrollLeft: false,
+                    canScrollRight: false,
+                    thumbnailScrollTimeout: null,
+                }
+            },
+            mounted() {
+                this.initLayout();
+                this.loadImages();
+                window.addEventListener('scroll', this.handleScroll);
+                window.addEventListener('resize', this.onResize);
+                window.addEventListener('scroll', this.handleSearchVisibility);
+                // 监听缩略图容器的滚动事件
+                this.$nextTick(() => {
+                    const container = this.$refs.thumbnailContainer;
+                    if (container) {
+                        container.addEventListener('scroll', this.updateScrollButtons);
+                    }
+                });
+            },
+            unmounted() {
+                window.removeEventListener('scroll', this.handleScroll);
+                window.removeEventListener('resize', this.onResize);
+                window.removeEventListener('scroll', this.handleSearchVisibility);
+                const container = this.$refs.thumbnailContainer;
+                if (container) {
+                    container.removeEventListener('scroll', this.updateScrollButtons);
+                }
+            },
+            methods: {
+                initLayout() {
+                    const container = this.$refs.gallery;
+                    this.containerWidth = container.clientWidth;
+                    
+                    // 动态计算最佳列数和列宽
+                    let idealColumnCount = Math.floor((this.containerWidth + this.gap) / (this.baseColumnWidth + this.gap));
+                    idealColumnCount = Math.max(1, Math.min(idealColumnCount, 6));
+                    
+                    // 根据容器宽度和列数反推实际列宽
+                    this.columnWidth = Math.max(
+                        this.minColumnWidth,
+                        Math.min(
+                            this.maxColumnWidth,
+                            (this.containerWidth - (idealColumnCount - 1) * this.gap) / idealColumnCount
+                        )
+                    );
+                    
+                    // 使用实际列宽重新计算列数
+                    this.columnCount = Math.floor((this.containerWidth + this.gap) / (this.columnWidth + this.gap));
+                    this.columnCount = Math.max(1, Math.min(this.columnCount, 6));
+                    
+                    // 最后调整列宽以填充容器
+                    this.columnWidth = (this.containerWidth - (this.columnCount - 1) * this.gap) / this.columnCount;
+                    
+                    // 初始化列高数组
+                    this.columns = Array(this.columnCount).fill(0);
+                    
+                    console.log(`容器宽度: ${this.containerWidth}, 列数: ${this.columnCount}, 列宽: ${this.columnWidth}`);
+                },
+                onResize() {
+                    // 重置加载状态
+                    this.loadingImages.clear();
+                    this.loadedImagesCount = 0;
+                    
+                    // 初始化布局
+                    this.initLayout();
+                    
+                    // 重新布局所有图片
+                    this.$nextTick(() => {
+                        this.relayoutImages();
+                        // 重新计算加载状态
+                        this.loadedImagesCount = this.processedImages.length;
+                        this.loading = false;
+                        console.log('重置后状态:', {
+                            loadedImagesCount: this.loadedImagesCount,
+                            processedImagesLength: this.processedImages.length,
+                            loading: this.loading
+                        });
+                    });
+                },
+                relayoutImages() {
+                    // 重置列高
+                    this.columns = Array(this.columnCount).fill(0);
+                    
+                    // 重置所有图片位置
+                    this.processedImages.forEach(image => {
+                        image.top = 0;
+                        image.left = 0;
+                    });
+                    
+                    // 重新计算每张图片的位置
+                    this.processedImages.forEach(image => {
+                        if (image.width && image.height) {
+                            const columnIndex = this.getShortestColumn();
+                            const left = columnIndex * (this.columnWidth + this.gap);
+                            const top = this.columns[columnIndex];
+                            
+                            image.left = left;
+                            image.top = top;
+                            
+                            const imageHeight = (image.height / image.width) * this.columnWidth;
+                            this.columns[columnIndex] += imageHeight + this.gap;
+                        }
+                    });
+                    
+                    // 更新容器高度
+                    this.$refs.gallery.style.height = Math.max(...this.columns) + 'px';
+                },
+                onImageLoad(image) {
+                    if (this.loadingImages.has(image.id)) {
+                        return;
+                    }
+                    this.loadingImages.add(image.id);
+                    
+                    if (!image.height) return;
+                    
+                    const columnIndex = this.getShortestColumn();
+                    const left = columnIndex * (this.columnWidth + this.gap);
+                    const top = this.columns[columnIndex];
+                    
+                    // 更新图片位置
+                    image.left = left;
+                    image.top = top;
+                    
+                    // 更新列高
+                    const imageHeight = (image.height / image.width) * this.columnWidth;
+                    this.columns[columnIndex] += imageHeight + this.gap;
+                    
+                    // 更新容器高度
+                    this.$refs.gallery.style.height = Math.max(...this.columns) + 'px';
+
+                    this.loadedImagesCount++;
+                    console.log(`图片加载完成: ${image.id}, 当前加载 ${this.loadedImagesCount}/${this.processedImages.length}`);
+                    
+                    if (this.loadedImagesCount === this.processedImages.length) {
+                        this.loading = false;
+                        this.page += 1;
+                        console.log('所有图片加载完成');
+                    }
+                },
+                preloadImage(image) {
+                    return new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            image.height = img.height;
+                            image.width = img.width;
+                            resolve(image);  // 直接返回加载完成的图片对象
+                        };
+                        img.onerror = reject;
+                        img.src = image.urls.regular;
+                    });
+                },
+                async loadImages() {
+                    if (this.loading || this.noMoreData) return;
+                    
+                    this.loading = true;
+                    try {
+                        const response = await fetch(
+                            `http://localhost:8000/api/images?page=${this.page}&query=${this.query}&per_page=${this.perPage}`
+                        );
+                        
+                        if (!response.ok) {
+                            throw new Error('网络请求失败');
+                        }
+                        
+                        const data = await response.json();
+                        
+                        if (data.results.length === 0) {
+                            this.noMoreData = true;
+                        } else {
+                            // 先预加载每张图片，获取尺寸信息
+                            for (const img of data.results) {
+                                const loadedImage = await this.preloadImage({
+                                    ...img,
+                                    top: 0,
+                                    left: 0
+                                });
+                                this.processedImages.push(loadedImage);
+                                this.onImageLoad(loadedImage);
+                            }
+                            
+                            this.currentBatchSize = data.results.length;
+                        }
+                    } catch (err) {
+                        this.error = '加载图片失败: ' + err.message;
+                        console.error('Error:', err);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                handleScroll() {
+                    const scrollPosition = window.innerHeight + window.scrollY;
+                    const documentHeight = document.documentElement.offsetHeight;
+                    console.log('要加载下一项')
+                    console.log(scrollPosition >= documentHeight - 200)
+                    console.log(!this.loading)
+                    console.log(this.loadedImagesCount === this.processedImages.length)
+                    if (scrollPosition >= documentHeight - 200 && 
+                        !this.loading && 
+                        this.loadedImagesCount === this.processedImages.length) {
+
+                            console.log('啊？')
+                        this.addToLoadingQueue(this.page+1);
+                    }
+                },
+                getShortestColumn() {
+                    return this.columns.indexOf(Math.min(...this.columns));
+                },
+                // 添加到加载队列
+                addToLoadingQueue(page) {
+                    if (!this.loadingQueue.includes(page)) {
+                        console.log(page)
+                        this.loadingQueue.push(page);
+                        this.processQueue();
+                    }
+                },
+
+                // 处理加载队列
+                async processQueue() {
+                    if (this.loading || this.loadingQueue.length === 0) return;
+                    console.log(this.loading)
+                    console.log(this.page)
+                    
+                    const nextPage = this.loadingQueue[0];
+                    console.log(nextPage)
+                    if (nextPage <= this.page) {
+                        // 如果该页已经加载过，移除并继续处理队列
+                        this.loadingQueue.shift();
+                        this.processQueue();
+                        return;
+                    }
+                    console.log(nextPage)
+                    this.currentLoadingPage = nextPage;
+                    await this.loadImagesWithRetry(nextPage);
+                },
+
+                // 带超时控制的单次请求
+                async fetchImagesWithTimeout(page) {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => {}, this.requestTimeout);
+                    // const timeoutId = setTimeout(() => controller.abort(), this.requestTimeout);
+                    try {
+                        const response = await fetch(
+                            `http://localhost:8000/api/images?page=${page}&query=${this.query}&per_page=${this.perPage}`,
+                            { signal: controller.signal }
+                        );
+                        
+                        clearTimeout(timeoutId);
+                        
+                        if (!response.ok) {
+                            throw new Error('网络请求失败');
+                        }
+                        
+                        const data = await response.json();
+                        return data;
+                    } catch (error) {
+                        clearTimeout(timeoutId);
+                        throw error;
+                    }
+                },
+
+                // 带重试机制的图片加载
+                async loadImagesWithRetry(page) {
+                    let attempts = 0;
+                    const maxAttempts = 3;
+                    
+                    const attemptLoad = async () => {
+                        attempts++;
+                        try {
+                            const data = await this.fetchImagesWithTimeout(page);
+                            
+                            // 成功获取数据，处理图片
+                            if (data.results.length === 0) {
+                                this.noMoreData = true;
+                            } else {
+                                const newImages = data.results.map(img => ({
+                                    ...img,
+                                    top: 0,
+                                    left: 0
+                                }));
+                                this.currentBatchSize = newImages.length;
+                                this.processedImages = [...this.processedImages, ...newImages];
+                                
+                                newImages.forEach(image => {
+                                    this.preloadImage(image)
+                                        .then(loadedImage => {
+                                            this.onImageLoad(loadedImage);
+                                        })
+                                        .catch(err => {
+                                            console.error('图片加载失败:', err);
+                                        });
+                                });
+                                
+                                this.page = page + 1;
+                            }
+                            
+                            // 成功后清理状态
+                            this.loadingQueue = this.loadingQueue.filter(p => p > page);
+                            this.currentLoadingPage = null;
+                            this.loading = false;
+                            return true;
+                        } catch (error) {
+                            console.error(`第 ${attempts} 次请求失败:`, error);
+                            
+                            if (attempts < maxAttempts) {
+                                // 等待2秒后重试
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                return attemptLoad();
+                            } else {
+                                this.error = `加载失败，已尝试 ${maxAttempts} 次`;
+                                this.loading = false;
+                                return false;
+                            }
+                        }
+                    };
+
+                    this.loading = true;
+                    return attemptLoad();
+                },
+
+                // 手动重试加载
+                retryLoading() {
+                    if (this.currentLoadingPage) {
+                        // 清空当前加载队列
+                        this.loadingQueue = [];
+                        // 重置加载状态
+                        this.loading = false;
+                        // 直接触发当前页的加载
+                        this.addToLoadingQueue(this.currentLoadingPage);
+                    }
+                },
+                handleSearchVisibility() {
+                    const st = window.pageYOffset || document.documentElement.scrollTop;
+                    
+                    // 在顶部或向上滚动时显示
+                    if (st <= 0 || st < this.lastScrollTop) {
+                        this.showSearch = true;
+                        this.hideSearch = false;
+                    } 
+                    // 向下滚动时隐藏
+                    else if (st > this.lastScrollTop) {
+                        this.showSearch = false;
+                        this.hideSearch = true;
+                    }
+                    
+                    this.lastScrollTop = st;
+                },
+                
+                async handleSearch() {
+                    if (!this.searchQuery.trim()) return;
+                    
+                    // 重置状态
+                    this.processedImages = [];
+                    this.page = 1;
+                    this.noMoreData = false;
+                    this.loadedImagesCount = 0;
+                    this.loadingImages.clear();
+                    this.loadingQueue = [];
+                    this.currentLoadingPage = null;
+                    this.query = this.searchQuery.trim();
+                    
+                    // 重新初始化列高
+                    this.columns = Array(this.columnCount).fill(0);
+                    
+                    // 加载新搜索结果
+                    await this.loadImages();
+                    
+                    // 滚动到顶部
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                },
+                openPopup(image) {
+                    this.selectedImage = image;
+                    this.selectedImageIndex = this.processedImages.findIndex(img => img.id === image.id);
+                    this.showPopup = true;
+                    document.body.style.overflow = 'hidden';
+                    
+                    // 初始化Canvas
+                    this.$nextTick(() => {
+                        this.initCanvas();
+                    });
+                },
+                
+                closePopup() {
+                    this.showPopup = false;
+                    this.selectedImage = null;
+                    this.selectedImageIndex = null;
+                    // 恢复背景滚动
+                    document.body.style.overflow = 'auto';
+                },
+                handleWheel(event) {
+                    // 阻止事件冒泡，防止触发预览图滚动
+                    event.stopPropagation();
+                    
+                    if (event.deltaY !== 0) {
+                        // 如果是垂直滚动，切换图片
+                        if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+                            if (event.deltaY > 0) {
+                                this.selectImage((this.selectedImageIndex + 1) % this.processedImages.length);
+                            } else {
+                                this.selectImage((this.selectedImageIndex - 1 + this.processedImages.length) % this.processedImages.length);
+                            }
+                        }
+                    }
+                },
+                startDrag(event) {
+                    if (event.button !== 0) return;
+                    
+                    this.isDragging = true;
+                    this.startX = event.clientX - this.centerX;
+                    this.startY = event.clientY - this.centerY;
+                    
+                    const handleMouseMove = (e) => {
+                        if (!this.isDragging) return;
+                        
+                        // 计算新的中心点
+                        let newCenterX = e.clientX - this.startX;
+                        let newCenterY = e.clientY - this.startY;
+                        
+                        // 计算边界
+                        const scaledWidth = this.imageWidth * this.scale;
+                        const scaledHeight = this.imageHeight * this.scale;
+                        
+                        const maxX = this.viewportWidth + (scaledWidth - this.viewportWidth) / 2;
+                        const minX = (this.viewportWidth - scaledWidth) / 2;
+                        const maxY = this.viewportHeight + (scaledHeight - this.viewportHeight) / 2;
+                        const minY = (this.viewportHeight - scaledHeight) / 2;
+                        
+                        // 应用边界限制
+                        this.centerX = Math.min(maxX, Math.max(minX, newCenterX));
+                        this.centerY = Math.min(maxY, Math.max(minY, newCenterY));
+                        
+                        // 重绘
+                        this.drawImage();
+                    };
+                    
+                    const handleMouseUp = () => {
+                        this.isDragging = false;
+                        document.removeEventListener('mousemove', handleMouseMove);
+                        document.removeEventListener('mouseup', handleMouseUp);
+                    };
+                    
+                    document.addEventListener('mousemove', handleMouseMove);
+                    document.addEventListener('mouseup', handleMouseUp);
+                },
+                toggleZoom(event) {
+                    const rect = this.$refs.canvas.getBoundingClientRect();
+                    const mouseX = event.clientX - rect.left;
+                    const mouseY = event.clientY - rect.top;
+
+                    if (this.scale === this.minScale) {
+                        // 放大到指定点
+                        const targetScale = this.minScale * 2;
+                        this.zoomToPoint(mouseX, mouseY, targetScale);
+                    } else {
+                        // 重置到初始状态
+                        this.scale = this.minScale;
+                        this.centerX = this.viewportWidth / 2;
+                        this.centerY = this.viewportHeight / 2;
+                        this.drawImage();
+                    }
+                },
+                zoomToPoint(mouseX, mouseY, targetScale) {
+                    // 计算鼠标位置相对于图片中心的偏移
+                    const dx = mouseX - this.centerX;
+                    const dy = mouseY - this.centerY;
+                    
+                    // 计算新的缩放比例
+                    this.scale = targetScale;
+                    
+                    // 调整中心点，使鼠标位置保持不变
+                    this.centerX = mouseX - dx * (targetScale / this.minScale);
+                    this.centerY = mouseY - dy * (targetScale / this.minScale);
+                    
+                    this.drawImage();
+                },
+                initCanvas() {
+                    const canvas = this.$refs.canvas;
+                    if (!canvas) return;
+
+                    this.ctx = canvas.getContext('2d');
+                    
+                    // 设置canvas尺寸为容器尺寸
+                    const container = canvas.parentElement;
+                    this.viewportWidth = container.clientWidth;
+                    this.viewportHeight = container.clientHeight;
+                    canvas.width = this.viewportWidth;
+                    canvas.height = this.viewportHeight;
+                    
+                    // 加载图片
+                    this.imageObj = new Image();
+                    this.imageObj.onload = () => {
+                        this.imageWidth = this.imageObj.width;
+                        this.imageHeight = this.imageObj.height;
+                        
+                        // 计算初始缩放比例和位置
+                        this.calculateInitialScale();
+                        this.centerX = this.viewportWidth / 2;
+                        this.centerY = this.viewportHeight / 2;
+                        
+                        // 绘制图片
+                        this.drawImage();
+                    };
+                    this.imageObj.src = this.selectedImage?.urls?.full || this.selectedImage?.urls?.regular;
+                },
+                calculateInitialScale() {
+                    const scaleX = this.viewportWidth / this.imageWidth;
+                    const scaleY = this.viewportHeight / this.imageHeight;
+                    this.scale = Math.min(scaleX, scaleY);
+                    this.minScale = this.scale;
+                },
+                drawImage() {
+                    if (!this.ctx || !this.imageObj) return;
+
+                    // 清除画布
+                    this.ctx.clearRect(0, 0, this.viewportWidth, this.viewportHeight);
+
+                    // 保存当前状态
+                    this.ctx.save();
+
+                    // 移动到中心点
+                    this.ctx.translate(this.centerX, this.centerY);
+                    
+                    // 应用缩放
+                    this.ctx.scale(this.scale, this.scale);
+
+                    // 绘制图片，居中
+                    const drawX = -this.imageWidth / 2;
+                    const drawY = -this.imageHeight / 2;
+                    this.ctx.drawImage(this.imageObj, drawX, drawY);
+
+                    // 恢复状态
+                    this.ctx.restore();
+                },
+                selectImage(index) {
+                    if (index >= 0 && index < this.processedImages.length) {
+                        this.selectedImageIndex = index;
+                        this.selectedImage = this.processedImages[index];
+                        this.initCanvas();
+                        this.$nextTick(() => {
+                            this.centerSelectedThumbnail();
+                        });
+                    }
+                },
+                centerSelectedThumbnail() {
+                    const container = this.$refs.thumbnailContainer;
+                    const selectedThumbnail = this.$refs.selectedThumbnail?.[0];
+                    if (!container || !selectedThumbnail) return;
+
+                    const containerWidth = container.clientWidth;
+                    const thumbnailWidth = selectedThumbnail.offsetWidth;
+                    const scrollLeft = selectedThumbnail.offsetLeft - (containerWidth / 2) + (thumbnailWidth / 2);
+                    
+                    container.scrollTo({
+                        left: scrollLeft,
+                        behavior: 'smooth'
+                    });
+
+                    // 更新滚动按钮状态
+                    this.updateScrollButtons();
+                },
+                scrollThumbnails(direction) {
+                    const container = this.$refs.thumbnailContainer;
+                    if (!container) return;
+
+                    const scrollAmount = container.clientWidth * 0.8;
+                    const newScrollLeft = direction === 'left' 
+                        ? container.scrollLeft - scrollAmount 
+                        : container.scrollLeft + scrollAmount;
+
+                    container.scrollTo({
+                        left: newScrollLeft,
+                        behavior: 'smooth'
+                    });
+
+                    // 更新滚动按钮状态
+                    this.updateScrollButtons();
+                },
+                updateScrollButtons() {
+                    const container = this.$refs.thumbnailContainer;
+                    if (!container) return;
+
+                    this.canScrollLeft = container.scrollLeft > 0;
+                    this.canScrollRight = container.scrollLeft < (container.scrollWidth - container.clientWidth);
+                },
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>
