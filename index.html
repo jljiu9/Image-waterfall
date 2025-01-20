@@ -501,7 +501,7 @@
                     // const timeoutId = setTimeout(() => controller.abort(), this.requestTimeout);
                     try {
                         const response = await fetch(
-                            `http://localhost:8000/api/images?page=${page}&query=${this.query}&per_page=${this.perPage}`,
+                            `/api/images?page=${page}&query=${this.query}&per_page=${this.perPage}`,
                             { signal: controller.signal }
                         );
                         
